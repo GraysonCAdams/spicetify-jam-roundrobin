@@ -118,30 +118,47 @@
   }
 
   // ── Update order text below toggle ──
+  function initials(name) {
+    if (!name) return "?";
+    return name
+      .split(/\s+/)
+      .map((w) => w[0])
+      .join("")
+      .toUpperCase();
+  }
+
   async function updateOrderText() {
     const el = document.getElementById("jamRoundRobinOrder");
     if (!el || !roundRobinEnabled) return;
 
-    const annotated = await getAnnotatedQueue();
-    if (annotated.length === 0) {
-      const currentOwner = getCurrentlyPlayingOwner();
-      if (currentOwner) {
-        el.textContent = `Now: ${currentOwner.displayName} · Queue empty`;
-      } else {
-        el.textContent = "Queue empty";
-      }
+    if (sessionMembers.length < 2) {
+      el.textContent = "";
       return;
     }
 
+    // Build the rotation order using the same priority logic as enforceRoundRobin
     const currentOwner = getCurrentlyPlayingOwner();
-    const parts = [];
-    if (currentOwner) {
-      parts.push(`▶ ${currentOwner.displayName}`);
-    }
-    annotated.forEach((t) => {
-      parts.push(t.owner || "?");
-    });
-    el.textContent = parts.join(" → ");
+    const currentIdx = currentOwner
+      ? sessionMembers.findIndex((m) => m.id === currentOwner.id)
+      : -1;
+
+    const ordered = sessionMembers
+      .map((m, i) => ({
+        member: m,
+        played: playedCount[m.id] || 0,
+        rotationOrder:
+          currentIdx >= 0
+            ? ((i - currentIdx - 1 + sessionMembers.length) %
+                sessionMembers.length)
+            : i,
+      }))
+      .sort((a, b) => {
+        if (a.played !== b.played) return a.played - b.played;
+        return a.rotationOrder - b.rotationOrder;
+      })
+      .map((p) => initials(p.member.displayName));
+
+    el.textContent = ordered.join(" → ");
   }
 
   // ── Session Members (from API) ──
