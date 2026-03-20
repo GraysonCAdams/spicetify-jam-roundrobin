@@ -70,6 +70,7 @@
 
     // Clone the structure of the existing toggle
     const wrapper = document.createElement("div");
+    wrapper.id = "jamRoundRobinWrapper";
     wrapper.innerHTML = `
       <label for="jamRoundRobinToggle" class="hgZr0mFedRYZODXAt6gQ">
         <span class="e-91000-text encore-text-body-small encore-internal-color-text-subdued" data-encore-id="text">
@@ -82,6 +83,14 @@
           </span>
         </label>
       </label>
+      <p id="jamRoundRobinOrder" style="
+        margin: 4px 0 0 0;
+        padding: 0;
+        font-size: 11px;
+        color: var(--text-subdued, #a7a7a7);
+        line-height: 1.3;
+        display: ${roundRobinEnabled ? "block" : "none"};
+      "></p>
     `;
 
     container.appendChild(wrapper);
@@ -96,11 +105,43 @@
             ? "Queue auto-rotate: ON"
             : "Queue auto-rotate: OFF"
         );
+        const orderEl = document.getElementById("jamRoundRobinOrder");
+        if (orderEl) {
+          orderEl.style.display = roundRobinEnabled ? "block" : "none";
+          if (roundRobinEnabled) updateOrderText();
+        }
       });
     }
 
     toggleInjected = true;
     log("UI toggle injected.");
+  }
+
+  // ── Update order text below toggle ──
+  async function updateOrderText() {
+    const el = document.getElementById("jamRoundRobinOrder");
+    if (!el || !roundRobinEnabled) return;
+
+    const annotated = await getAnnotatedQueue();
+    if (annotated.length === 0) {
+      const currentOwner = getCurrentlyPlayingOwner();
+      if (currentOwner) {
+        el.textContent = `Now: ${currentOwner.displayName} · Queue empty`;
+      } else {
+        el.textContent = "Queue empty";
+      }
+      return;
+    }
+
+    const currentOwner = getCurrentlyPlayingOwner();
+    const parts = [];
+    if (currentOwner) {
+      parts.push(`▶ ${currentOwner.displayName}`);
+    }
+    annotated.forEach((t) => {
+      parts.push(t.owner || "?");
+    });
+    el.textContent = parts.join(" → ");
   }
 
   // ── Session Members (from API) ──
@@ -412,6 +453,9 @@
           lastQueueUids = (q.queued || []).map((t) => t.uid).join(",");
         } catch (e) {}
       }
+
+      // Keep the order text fresh
+      updateOrderText();
     }
   }
 
