@@ -29,11 +29,79 @@
   // ── State ──
   let sessionMembers = []; // { id, displayName, imageUrl } from session API
   let isActive = false;
+  let roundRobinEnabled = true; // controlled by UI toggle
   let pollHandle = null;
   let lastQueueUids = ""; // stringified uid list for change detection
   let isReordering = false; // prevent re-entrancy
   // Track how many songs each member has had played (for fairness catch-up)
   const playedCount = {}; // memberId → number of tracks played
+  let toggleInjected = false; // track whether the DOM toggle exists
+
+  // ── UI Toggle ──
+  // Inject a toggle next to the "Let others change what's playing" toggle
+  function injectToggle() {
+    // Don't duplicate
+    if (document.getElementById("jamRoundRobinToggle")) {
+      toggleInjected = true;
+      return;
+    }
+
+    // Find the existing queueOnlyMode toggle's parent container
+    const existingToggle = document.getElementById("queueOnlyMode");
+    if (!existingToggle) {
+      toggleInjected = false;
+      return;
+    }
+
+    // Walk up to the wrapper div that contains the label+toggle pair
+    const existingWrapper = existingToggle.closest(
+      "div.hgZr0mFedRYZODXAt6gQ"
+    )?.parentElement;
+    if (!existingWrapper) {
+      // Fallback: try parent of the label
+      const label = existingToggle.closest("label.hgZr0mFedRYZODXAt6gQ");
+      if (!label?.parentElement) return;
+    }
+
+    const container = existingToggle.closest(
+      "label.hgZr0mFedRYZODXAt6gQ"
+    )?.parentElement?.parentElement;
+    if (!container) return;
+
+    // Clone the structure of the existing toggle
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = `
+      <label for="jamRoundRobinToggle" class="hgZr0mFedRYZODXAt6gQ">
+        <span class="e-91000-text encore-text-body-small encore-internal-color-text-subdued" data-encore-id="text">
+          Auto-rotate queue (round robin)
+        </span>
+        <label class="x-toggle-wrapper">
+          <input id="jamRoundRobinToggle" class="x-toggle-input" type="checkbox" ${roundRobinEnabled ? 'checked=""' : ""}>
+          <span class="x-toggle-indicatorWrapper hHbxQzEOQZOm1TWz5Tqg">
+            <span class="x-toggle-indicator hHbxQzEOQZOm1TWz5Tqg"></span>
+          </span>
+        </label>
+      </label>
+    `;
+
+    container.appendChild(wrapper);
+
+    const input = document.getElementById("jamRoundRobinToggle");
+    if (input) {
+      input.addEventListener("change", () => {
+        roundRobinEnabled = input.checked;
+        log("Round-robin toggled:", roundRobinEnabled ? "ON" : "OFF");
+        Spicetify.showNotification(
+          roundRobinEnabled
+            ? "Queue auto-rotate: ON"
+            : "Queue auto-rotate: OFF"
+        );
+      });
+    }
+
+    toggleInjected = true;
+    log("UI toggle injected.");
+  }
 
   // ── Session Members (from API) ──
   async function fetchSessionMembers() {
@@ -316,8 +384,14 @@
       }
     }
 
+    // Inject toggle if the Jam panel is open but our toggle is missing
+    if (!document.getElementById("jamRoundRobinToggle")) {
+      toggleInjected = false;
+      injectToggle();
+    }
+
     // Check for queue changes and enforce round-robin
-    if (isActive) {
+    if (isActive && roundRobinEnabled) {
       let apiQueue;
       try {
         apiQueue = await PlayerAPI.getQueue();
@@ -343,7 +417,7 @@
 
   // ── Song Change Handler ──
   function onSongChange() {
-    if (!isActive) return;
+    if (!isActive || !roundRobinEnabled) return;
     const data = Spicetify.Player.data;
     if (!data?.item) return;
     const track = data.item.metadata;
@@ -407,6 +481,8 @@
     getState: () => ({
       sessionMembers,
       isActive,
+      roundRobinEnabled,
+      toggleInjected,
       lastQueueUids,
       currentlyPlaying: getCurrentlyPlayingOwner()?.displayName || "playlist",
       playedCount: sessionMembers.reduce((acc, m) => {
