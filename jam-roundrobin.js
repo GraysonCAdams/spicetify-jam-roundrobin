@@ -36,6 +36,7 @@
   // Track how many songs each member has had played (for fairness catch-up)
   const playedCount = {}; // memberId → number of tracks played
   let toggleInjected = false; // track whether the DOM toggle exists
+  const membersWithTracksSet = new Set(); // member IDs who have queued tracks
 
   // ── UI Toggle ──
   // Inject a toggle next to the "Let others change what's playing" toggle
@@ -137,15 +138,21 @@
     }
 
     // Build the rotation order using the same priority logic as enforceRoundRobin
+    // Only show members who have tracks in the queue
     const currentOwner = getCurrentlyPlayingOwner();
     const currentIdx = currentOwner
       ? sessionMembers.findIndex((m) => m.id === currentOwner.id)
       : -1;
 
+    // Use tracked state from last enforceRoundRobin run
+    const memberHasTracks = (m) => membersWithTracksSet.has(m.id);
+
+    // Show all members sorted by priority, but grey out those without tracks
     const ordered = sessionMembers
       .map((m, i) => ({
         member: m,
         played: playedCount[m.id] || 0,
+        hasTracks: memberHasTracks(m),
         rotationOrder:
           currentIdx >= 0
             ? ((i - currentIdx - 1 + sessionMembers.length) %
@@ -153,12 +160,18 @@
             : i,
       }))
       .sort((a, b) => {
+        // Active members first, then inactive
+        if (a.hasTracks !== b.hasTracks) return a.hasTracks ? -1 : 1;
         if (a.played !== b.played) return a.played - b.played;
         return a.rotationOrder - b.rotationOrder;
       })
-      .map((p) => initials(p.member.displayName));
+      .map((p) => {
+        const name = initials(p.member.displayName);
+        if (p.hasTracks) return name;
+        return `<span style="opacity: 0.35">${name}</span>`;
+      });
 
-    el.textContent = ordered.join(" → ");
+    el.innerHTML = ordered.join(" → ");
   }
 
   // ── Session Members (from API) ──
@@ -190,7 +203,7 @@
 
     // Facebook CDN: stable photo ID across size variants
     const fbId = (url) => {
-      const m = url.match(/(\d{10,}_\d{10,}_\d{10,})/);
+      const m = url.match(/(\d{5,}_\d{5,}_\d{5,})/);
       return m ? m[1] : null;
     };
     const f1 = fbId(domSrc);
@@ -294,6 +307,16 @@
 
     try {
       const annotated = await getAnnotatedQueue();
+
+      // Update the tracked set of members with queued tracks (before early return)
+      const ownedTracks = annotated.filter((t) => t.ownerId);
+      if (ownedTracks.length > 0) {
+        membersWithTracksSet.clear();
+        for (const t of ownedTracks) {
+          membersWithTracksSet.add(t.ownerId);
+        }
+      }
+
       if (annotated.length < 2) {
         log(
           "Queue has",
@@ -329,16 +352,28 @@
         ? sessionMembers.findIndex((m) => m.id === currentOwner.id)
         : -1;
 
-      const memberPriority = sessionMembers
-        .map((m, i) => ({
+      // Only include members who actually have tracks in the queue
+      const membersWithTracks = sessionMembers.filter(
+        (m) => byOwner[m.id] && byOwner[m.id].length > 0
+      );
+
+      if (membersWithTracks.length < sessionMembers.length) {
+        const skipped = sessionMembers
+          .filter((m) => !membersWithTracks.includes(m))
+          .map((m) => m.displayName);
+        log("Skipping members with no queued tracks:", skipped.join(", "));
+      }
+
+      const memberPriority = membersWithTracks
+        .map((m) => ({
           member: m,
           played: playedCount[m.id] || 0,
           // Rotation distance from current player (next in line = 1)
           rotationOrder:
             currentIdx >= 0
-              ? ((i - currentIdx - 1 + sessionMembers.length) %
+              ? ((sessionMembers.indexOf(m) - currentIdx - 1 + sessionMembers.length) %
                   sessionMembers.length)
-              : i,
+              : sessionMembers.indexOf(m),
         }))
         .sort((a, b) => {
           // Fewest plays first (catch-up priority)
@@ -469,6 +504,16 @@
           const q = await PlayerAPI.getQueue();
           lastQueueUids = (q.queued || []).map((t) => t.uid).join(",");
         } catch (e) {}
+      }
+
+      // Refresh which members have tracks from the DOM (if queue is visible)
+      const domTracks = extractDOMQueue();
+      const identifiedOwners = domTracks.filter((t) => t.ownerId);
+      if (identifiedOwners.length > 0) {
+        membersWithTracksSet.clear();
+        for (const t of identifiedOwners) {
+          membersWithTracksSet.add(t.ownerId);
+        }
       }
 
       // Keep the order text fresh
