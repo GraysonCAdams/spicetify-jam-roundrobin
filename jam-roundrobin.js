@@ -1,7 +1,7 @@
 // NAME: Jam Round Robin
 // AUTHOR: Grayson Adams
 // DESCRIPTION: Round-robin queue contributions in Spotify Jam so each person gets a turn
-// VERSION: 0.3.0
+// VERSION: 0.4.0
 
 /// <reference path="../../.spicetify/globals.d.ts" />
 
@@ -39,7 +39,45 @@
   const membersWithTracksSet = new Set(); // member IDs who have queued tracks
 
   // ── UI Toggle ──
-  // Inject a toggle next to the "Let others change what's playing" toggle
+  // Inject a toggle next to the "Let others change what's playing" toggle.
+  // Uses resilient selectors that don't depend on obfuscated class names.
+
+  function findExistingToggleRow() {
+    // Strategy 1: Find by known ID
+    let input = document.getElementById("queueOnlyMode");
+
+    // Strategy 2: Find by text near a checkbox toggle
+    if (!input) {
+      for (const toggle of document.querySelectorAll('input[type="checkbox"]')) {
+        let el = toggle;
+        for (let i = 0; i < 6; i++) {
+          el = el.parentElement;
+          if (!el) break;
+          if (el.textContent?.includes("change what")) {
+            input = toggle;
+            break;
+          }
+        }
+        if (input) break;
+      }
+    }
+
+    if (!input) return null;
+
+    // Walk up through nested <label> elements, then one more to the wrapper div.
+    // Structure: input > label (toggle) > label (row) > div (wrapper)
+    let rowEl = input;
+    while (rowEl.parentElement && rowEl.parentElement.tagName === "LABEL") {
+      rowEl = rowEl.parentElement;
+    }
+    // rowEl is now the outermost label; go one level up to the wrapper div
+    if (rowEl.parentElement) {
+      rowEl = rowEl.parentElement;
+    }
+
+    return { input, rowEl };
+  }
+
   function injectToggle() {
     // Don't duplicate
     if (document.getElementById("jamRoundRobinToggle")) {
@@ -47,55 +85,71 @@
       return;
     }
 
-    // Find the existing queueOnlyMode toggle's parent container
-    const existingToggle = document.getElementById("queueOnlyMode");
-    if (!existingToggle) {
+    const found = findExistingToggleRow();
+    if (!found) {
       toggleInjected = false;
       return;
     }
 
-    // Walk up to the wrapper div that contains the label+toggle pair
-    const existingWrapper = existingToggle.closest(
-      "div.hgZr0mFedRYZODXAt6gQ"
-    )?.parentElement;
-    if (!existingWrapper) {
-      // Fallback: try parent of the label
-      const label = existingToggle.closest("label.hgZr0mFedRYZODXAt6gQ");
-      if (!label?.parentElement) return;
-    }
-
-    const container = existingToggle.closest(
-      "label.hgZr0mFedRYZODXAt6gQ"
-    )?.parentElement?.parentElement;
+    const { input: existingInput, rowEl } = found;
+    const container = rowEl.parentElement;
     if (!container) return;
 
-    // Clone the structure of the existing toggle
+    // Deep-clone the existing toggle row to inherit current class names/structure
+    const clone = rowEl.cloneNode(true);
+
+    // Swap the checkbox ID and checked state
+    const clonedInput = clone.querySelector('input[type="checkbox"]');
+    if (!clonedInput) return;
+    clonedInput.id = "jamRoundRobinToggle";
+    clonedInput.checked = roundRobinEnabled;
+    clonedInput.removeAttribute("name");
+
+    // Update any <label for="..."> pointing at the old ID
+    for (const lbl of clone.querySelectorAll("label[for]")) {
+      if (lbl.getAttribute("for") === existingInput.id) {
+        lbl.setAttribute("for", "jamRoundRobinToggle");
+      }
+    }
+
+    // Replace the label text. Find the text span that mentions "change what"
+    // or, failing that, the first leaf span with meaningful text.
+    let textReplaced = false;
+    for (const span of clone.querySelectorAll("span")) {
+      if (span.children.length === 0 && span.textContent.trim().length > 3) {
+        span.textContent = "Auto-rotate queue (round robin)";
+        textReplaced = true;
+        break;
+      }
+    }
+    if (!textReplaced) {
+      // Fallback: find any text node
+      const walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        if (walker.currentNode.textContent.trim().length > 3) {
+          walker.currentNode.textContent = "Auto-rotate queue (round robin)";
+          break;
+        }
+      }
+    }
+
+    // Wrap clone + order text
     const wrapper = document.createElement("div");
     wrapper.id = "jamRoundRobinWrapper";
-    wrapper.innerHTML = `
-      <label for="jamRoundRobinToggle" class="hgZr0mFedRYZODXAt6gQ">
-        <span class="e-91000-text encore-text-body-small encore-internal-color-text-subdued" data-encore-id="text">
-          Auto-rotate queue (round robin)
-        </span>
-        <label class="x-toggle-wrapper">
-          <input id="jamRoundRobinToggle" class="x-toggle-input" type="checkbox" ${roundRobinEnabled ? 'checked=""' : ""}>
-          <span class="x-toggle-indicatorWrapper hHbxQzEOQZOm1TWz5Tqg">
-            <span class="x-toggle-indicator hHbxQzEOQZOm1TWz5Tqg"></span>
-          </span>
-        </label>
-      </label>
-      <p id="jamRoundRobinOrder" style="
-        margin: 4px 0 0 0;
-        padding: 0;
-        font-size: 11px;
-        color: var(--text-subdued, #a7a7a7);
-        line-height: 1.3;
-        display: ${roundRobinEnabled ? "block" : "none"};
-      "></p>
+    wrapper.appendChild(clone);
+
+    const orderP = document.createElement("p");
+    orderP.id = "jamRoundRobinOrder";
+    orderP.style.cssText = `
+      margin: 4px 0 0 0; padding: 0; font-size: 11px;
+      color: var(--text-subdued, #a7a7a7); line-height: 1.3;
+      display: ${roundRobinEnabled ? "block" : "none"};
     `;
+    wrapper.appendChild(orderP);
 
     container.appendChild(wrapper);
 
+    // Attach event listener on the live element
     const input = document.getElementById("jamRoundRobinToggle");
     if (input) {
       input.addEventListener("change", () => {
@@ -210,7 +264,16 @@
     const f2 = fbId(memberUrl);
     if (f1 && f2) return f1 === f2;
 
-    // Fallback: substring match on path
+    // Fallback: compare filename (last path segment, ignoring CDN host and query)
+    const filename = (url) => {
+      const path = url.replace(/[?#].*/, "");
+      return path.split("/").pop() || "";
+    };
+    const fn1 = filename(domSrc);
+    const fn2 = filename(memberUrl);
+    if (fn1 && fn2 && fn1 === fn2) return true;
+
+    // Last resort: substring match on path
     const short = (url) =>
       url.replace(/[?#].*/, "").replace(/https?:\/\//, "");
     return (
@@ -231,7 +294,7 @@
     items.forEach((item) => {
       const flipId = item.getAttribute("data-flip-id");
       const titleEl = item.querySelector("[id^='listrow-title']");
-      const avatarImg = item.querySelector("img.main-avatar-image");
+      const avatarImg = item.querySelector('a[href^="/user/"] img');
       const trackName = titleEl?.textContent || "?";
       const avatarSrc = avatarImg?.src || "";
 
@@ -288,7 +351,7 @@
       "ul[aria-label='Now playing']"
     );
     if (!nowPlayingSection) return null;
-    const avatarImg = nowPlayingSection.querySelector("img.main-avatar-image");
+    const avatarImg = nowPlayingSection.querySelector('a[href^="/user/"] img');
     if (!avatarImg) return null; // no avatar = from playlist, not a user queue
 
     const src = avatarImg.src || "";
